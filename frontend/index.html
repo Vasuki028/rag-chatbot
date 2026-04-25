@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RAG Chatbot — Chat with your PDF</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0a0a0f;
+      --surface:   #13131a;
+      --surface2:  #1c1c27;
+      --border:    #2a2a3d;
+      --accent:    #7c6aff;
+      --accent2:   #ff6a9c;
+      --text:      #e8e8f0;
+      --muted:     #6b6b88;
+      --user-bg:   #1e1a38;
+      --bot-bg:    #131320;
+      --success:   #4ade80;
+      --warning:   #fbbf24;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      overflow: hidden;
+    }
+
+    /* ── noise overlay ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── glow orbs ── */
+    body::after {
+      content: '';
+      position: fixed;
+      width: 600px; height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(124,106,255,0.08) 0%, transparent 70%);
+      top: -200px; right: -200px;
+      pointer-events: none; z-index: 0;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      height: 100vh;
+      position: relative; z-index: 1;
+    }
+
+    /* ══════════════════════════════
+       SIDEBAR
+    ══════════════════════════════ */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 28px 24px;
+      gap: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .sidebar::before {
+      content: '';
+      position: absolute;
+      bottom: -100px; left: -100px;
+      width: 300px; height: 300px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,106,156,0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .logo {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .logo-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 20px;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo-sub {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+
+    /* Upload zone */
+    .upload-section { display: flex; flex-direction: column; gap: 12px; }
+
+    .upload-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .drop-zone {
+      border: 1.5px dashed var(--border);
+      border-radius: 12px;
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(124,106,255,0.05);
+    }
+
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0;
+      opacity: 0; cursor: pointer;
+    }
+
+    .drop-icon {
+      font-size: 28px;
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .drop-text {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .drop-text span {
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .upload-btn {
+      background: linear-gradient(135deg, var(--accent), #5b4de8);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 12px;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .upload-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(124,106,255,0.35); }
+    .upload-btn:active { transform: translateY(0); }
+    .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    /* Status */
+    .status-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+
+    .status-dot.active { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .status-dot.loading { background: var(--warning); animation: pulse 1s infinite; }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .status-text { color: var(--muted); }
+    .status-text.active { color: var(--text); }
+
+    .filename-badge {
+      background: rgba(124,106,255,0.12);
+      border: 1px solid rgba(124,106,255,0.25);
+      color: var(--accent);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 11px;
+      word-break: break-all;
+      display: none;
+    }
+
+    .chunk-info {
+      font-size: 11px;
+      color: var(--muted);
+      display: none;
+    }
+
+    /* Tips */
+    .tips {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .tips-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .tip {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 8px 10px;
+      background: var(--surface2);
+      border-radius: 8px;
+      border-left: 2px solid var(--border);
+      line-height: 1.5;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tip:hover {
+      border-left-color: var(--accent);
+      color: var(--text);
+      background: rgba(124,106,255,0.06);
+    }
+
+    /* ══════════════════════════════
+       MAIN CHAT
+    ══════════════════════════════ */
+    .chat-area {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 20px 28px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .chat-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .model-badge {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .model-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 5px var(--success);
+    }
+
+    /* Messages */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      scroll-behavior: smooth;
+    }
+
+    .messages::-webkit-scrollbar { width: 4px; }
+    .messages::-webkit-scrollbar-track { background: transparent; }
+    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* Welcome state */
+    .welcome {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 16px;
+      text-align: center;
+      animation: fadeIn 0.6s ease;
+    }
+
+    .welcome-icon {
+      font-size: 48px;
+      filter: grayscale(0.2);
+    }
+
+    .welcome-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--text), var(--muted));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .welcome-sub {
+      font-size: 13px;
+      color: var(--muted);
+      max-width: 320px;
+      line-height: 1.7;
+    }
+
+    /* Message bubbles */
+    .message {
+      display: flex;
+      gap: 12px;
+      animation: slideUp 0.3s ease;
+      max-width: 820px;
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; } to { opacity: 1; }
+    }
+
+    .message.user { flex-direction: row-reverse; align-self: flex-end; }
+    .message.bot  { align-self: flex-start; }
+
+    .avatar {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .message.user .avatar {
+      background: linear-gradient(135deg, var(--accent2), #e040a0);
+    }
+
+    .message.bot .avatar {
+      background: linear-gradient(135deg, var(--accent), #5b4de8);
+    }
+
+    .bubble {
+      padding: 14px 18px;
+      border-radius: 14px;
+      font-size: 13.5px;
+      line-height: 1.75;
+      max-width: 680px;
+      position: relative;
+    }
+
+    .message.user .bubble {
+      background: var(--user-bg);
+      border: 1px solid rgba(124,106,255,0.2);
+      border-top-right-radius: 4px;
+      color: var(--text);
+    }
+
+    .message.bot .bubble {
+      background: var(--bot-bg);
+      border: 1px solid var(--border);
+      border-top-left-radius: 4px;
+      color: var(--text);
+    }
+
+    /* Streaming cursor */
+    .cursor {
+      display: inline-block;
+      width: 2px; height: 14px;
+      background: var(--accent);
+      border-radius: 1px;
+      margin-left: 2px;
+      vertical-align: middle;
+      animation: blink 0.8s infinite;
+    }
+
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* Input area */
+    .input-area {
+      padding: 20px 28px 24px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .input-wrapper {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 14px;
+      padding: 12px 14px;
+      transition: border-color 0.2s;
+    }
+
+    .input-wrapper:focus-within { border-color: var(--accent); }
+
+    #question-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 13.5px;
+      line-height: 1.5;
+      resize: none;
+      max-height: 120px;
+      min-height: 22px;
+    }
+
+    #question-input::placeholder { color: var(--muted); }
+
+    .send-btn {
+      background: linear-gradient(135deg, var(--accent), #5b4de8);
+      border: none;
+      border-radius: 10px;
+      width: 38px; height: 38px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+      color: #fff;
+      font-size: 16px;
+    }
+
+    .send-btn:hover { transform: scale(1.05); box-shadow: 0 4px 16px rgba(124,106,255,0.4); }
+    .send-btn:active { transform: scale(0.97); }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .input-footer {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* Progress bar */
+    .progress-bar {
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.3s ease;
+      margin-bottom: 8px;
+      display: none;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+      z-index: 999;
+      max-width: 300px;
+    }
+
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { border-color: rgba(74,222,128,0.3); }
+    .toast.error   { border-color: rgba(255,106,106,0.3); }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ── SIDEBAR ── -->
+  <aside class="sidebar">
+
+    <div class="logo">
+      <div class="logo-title">RAG Chatbot</div>
+      <div class="logo-sub">// powered by Groq + ChromaDB</div>
+    </div>
+
+    <div class="upload-section">
+      <div class="upload-label">📎 Upload PDF</div>
+
+      <div class="drop-zone" id="drop-zone">
+        <input type="file" id="pdf-file" accept=".pdf" />
+        <span class="drop-icon">📄</span>
+        <div class="drop-text">
+          Drop your PDF here or <span>browse</span>
+        </div>
+      </div>
+
+      <div class="progress-bar" id="progress-bar"></div>
+
+      <button class="upload-btn" id="upload-btn" disabled>
+        Upload & Process PDF
+      </button>
+    </div>
+
+    <div class="status-card">
+      <div class="status-row">
+        <div class="status-dot" id="status-dot"></div>
+        <div class="status-text" id="status-text">No PDF uploaded</div>
+      </div>
+      <div class="filename-badge" id="filename-badge"></div>
+      <div class="chunk-info" id="chunk-info"></div>
+    </div>
+
+    <div class="tips">
+      <div class="tips-label">💡 Try asking</div>
+      <div class="tip" onclick="useTip(this)">Summarize the main points of this document</div>
+      <div class="tip" onclick="useTip(this)">What are the key conclusions?</div>
+      <div class="tip" onclick="useTip(this)">Explain the most important section</div>
+    </div>
+
+  </aside>
+
+  <!-- ── CHAT AREA ── -->
+  <main class="chat-area">
+
+    <div class="chat-header">
+      <div class="chat-title">Chat with your PDF</div>
+      <div class="model-badge">
+        <div class="model-dot"></div>
+        llama3-8b-8192 · Groq
+      </div>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">🔍</div>
+        <div class="welcome-title">Upload a PDF to begin</div>
+        <div class="welcome-sub">Drop any PDF in the sidebar and start asking questions. The AI will answer based on your document's content.</div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-wrapper">
+        <textarea
+          id="question-input"
+          placeholder="Ask anything about your PDF..."
+          rows="1"
+          disabled
+        ></textarea>
+        <button class="send-btn" id="send-btn" disabled title="Send">
+          ↑
+        </button>
+      </div>
+      <div class="input-footer">Enter to send · Shift+Enter for new line</div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+  const API = '';  // empty = same origin (FastAPI serves this file)
+
+  // ── Elements ──
+  const pdfFileInput   = document.getElementById('pdf-file');
+  const uploadBtn      = document.getElementById('upload-btn');
+  const dropZone       = document.getElementById('drop-zone');
+  const progressBar    = document.getElementById('progress-bar');
+  const statusDot      = document.getElementById('status-dot');
+  const statusText     = document.getElementById('status-text');
+  const filenameBadge  = document.getElementById('filename-badge');
+  const chunkInfo      = document.getElementById('chunk-info');
+  const messagesEl     = document.getElementById('messages');
+  const welcomeEl      = document.getElementById('welcome');
+  const questionInput  = document.getElementById('question-input');
+  const sendBtn        = document.getElementById('send-btn');
+  const toastEl        = document.getElementById('toast');
+
+  let selectedFile = null;
+  let isUploading  = false;
+  let isStreaming  = false;
+
+  // ── File selection ──
+  pdfFileInput.addEventListener('change', () => {
+    selectedFile = pdfFileInput.files[0];
+    if (selectedFile) {
+      uploadBtn.disabled = false;
+      dropZone.querySelector('.drop-text').innerHTML =
+        `<span>${selectedFile.name}</span><br><small style="color:var(--muted)">${(selectedFile.size/1024).toFixed(1)} KB</small>`;
+    }
+  });
+
+  // Drag and drop
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file && file.name.endsWith('.pdf')) {
+      selectedFile = file;
+      uploadBtn.disabled = false;
+      dropZone.querySelector('.drop-text').innerHTML =
+        `<span>${file.name}</span><br><small style="color:var(--muted)">${(file.size/1024).toFixed(1)} KB</small>`;
+    } else {
+      showToast('❌ Please drop a PDF file', 'error');
+    }
+  });
+
+  // ── Upload ──
+  uploadBtn.addEventListener('click', async () => {
+    if (!selectedFile || isUploading) return;
+    isUploading = true;
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Processing...';
+
+    // Show progress
+    progressBar.style.display = 'block';
+    progressBar.style.width = '0%';
+    statusDot.classList.add('loading');
+    statusText.textContent = 'Processing PDF...';
+    statusText.classList.remove('active');
+
+    // Animate progress bar (fake progress while waiting)
+    let prog = 0;
+    const progInterval = setInterval(() => {
+      prog = Math.min(prog + Math.random() * 12, 85);
+      progressBar.style.width = prog + '%';
+    }, 300);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const res = await fetch(`${API}/upload`, { method: 'POST', body: formData });
+      const data = await res.json();
+
+      clearInterval(progInterval);
+
+      if (!res.ok) throw new Error(data.detail || 'Upload failed');
+
+      progressBar.style.width = '100%';
+
+      // Update status
+      statusDot.classList.remove('loading');
+      statusDot.classList.add('active');
+      statusText.textContent = 'PDF ready';
+      statusText.classList.add('active');
+
+      filenameBadge.textContent = data.filename;
+      filenameBadge.style.display = 'block';
+      chunkInfo.textContent = `${data.total_chunks} chunks embedded`;
+      chunkInfo.style.display = 'block';
+
+      // Enable chat
+      questionInput.disabled = false;
+      sendBtn.disabled = false;
+      questionInput.focus();
+
+      // Hide welcome
+      welcomeEl.style.display = 'none';
+
+      // Add system message
+      addMessage('bot', `✅ **${data.filename}** has been processed into **${data.total_chunks} chunks** and embedded. You can now ask me anything about this document!`);
+
+      showToast(`✅ PDF processed! ${data.total_chunks} chunks ready`, 'success');
+
+      setTimeout(() => { progressBar.style.display = 'none'; }, 800);
+
+    } catch (err) {
+      clearInterval(progInterval);
+      progressBar.style.display = 'none';
+      statusDot.classList.remove('loading');
+      statusText.textContent = 'Upload failed';
+      uploadBtn.disabled = false;
+      showToast(`❌ ${err.message}`, 'error');
+    }
+
+    uploadBtn.textContent = 'Upload & Process PDF';
+    isUploading = false;
+  });
+
+  // ── Chat ──
+  async function sendQuestion() {
+    const question = questionInput.value.trim();
+    if (!question || isStreaming) return;
+
+    isStreaming = true;
+    sendBtn.disabled = true;
+    questionInput.value = '';
+    autoResize();
+
+    // Add user message
+    addMessage('user', question);
+
+    // Add bot message with cursor
+    const botBubble = addMessage('bot', '');
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    botBubble.appendChild(cursor);
+
+    try {
+      const res = await fetch(`${API}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Something went wrong');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        fullText += chunk;
+        botBubble.textContent = fullText;
+        botBubble.appendChild(cursor);
+        scrollToBottom();
+      }
+
+      cursor.remove();
+
+    } catch (err) {
+      cursor.remove();
+      botBubble.textContent = `⚠️ ${err.message}`;
+      botBubble.style.color = '#ff6a6a';
+      showToast(`❌ ${err.message}`, 'error');
+    }
+
+    isStreaming = false;
+    sendBtn.disabled = false;
+    questionInput.focus();
+  }
+
+  // ── Helpers ──
+  function addMessage(role, text) {
+    const msg = document.createElement('div');
+    msg.className = `message ${role}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = role === 'user' ? '👤' : '🤖';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+
+    msg.appendChild(avatar);
+    msg.appendChild(bubble);
+    messagesEl.appendChild(msg);
+    scrollToBottom();
+    return bubble;
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function showToast(msg, type = '') {
+    toastEl.textContent = msg;
+    toastEl.className = `toast ${type} show`;
+    setTimeout(() => toastEl.classList.remove('show'), 3500);
+  }
+
+  function useTip(el) {
+    if (questionInput.disabled) {
+      showToast('⚠️ Upload a PDF first!', 'error');
+      return;
+    }
+    questionInput.value = el.textContent;
+    questionInput.focus();
+    autoResize();
+  }
+
+  function autoResize() {
+    questionInput.style.height = 'auto';
+    questionInput.style.height = Math.min(questionInput.scrollHeight, 120) + 'px';
+  }
+
+  // ── Keyboard shortcuts ──
+  questionInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendQuestion();
+    }
+  });
+
+  questionInput.addEventListener('input', autoResize);
+  sendBtn.addEventListener('click', sendQuestion);
+
+  // ── Check server status on load ──
+  fetch(`${API}/status`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.pdf_uploaded) {
+        statusDot.classList.add('active');
+        statusText.textContent = 'PDF ready';
+        statusText.classList.add('active');
+        filenameBadge.textContent = data.filename;
+        filenameBadge.style.display = 'block';
+        questionInput.disabled = false;
+        sendBtn.disabled = false;
+        welcomeEl.style.display = 'none';
+        addMessage('bot', `Welcome back! **${data.filename}** is still loaded. Ask me anything!`);
+      }
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>
